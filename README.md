@@ -8,7 +8,9 @@ Keeps track of liveliness of the local node (consumer) and remote nodes (produce
 
 Example of information tracked by dcp_traffic_spy:
 > dcp_traffic_spy:get_nodes().
+
 > [{'n_2@127.0.0.1',[{seconds_since_last_update,34.211315},
+
 >                    stale,
 >                    {type,producer},
 >                    {node_last_heard,{1460,147395,140940}},
