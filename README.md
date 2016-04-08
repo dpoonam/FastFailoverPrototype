@@ -1,5 +1,7 @@
 # FastFailoverPrototype
 
-So far contains prototype code for:
+Contains prototype code for:
 * DCP Traffic Spy
 * KV Monitor
+
+
