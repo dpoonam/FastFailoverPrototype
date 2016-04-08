@@ -12,18 +12,31 @@ Example of information tracked by dcp_traffic_spy:
 > [{'n_2@127.0.0.1',[{seconds_since_last_update,34.211315},
 
 >                    stale,
+
 >                    {type,producer},
+
 >                    {node_last_heard,{1460,147395,140940}},
+
 >                    {buckets,[{"default",
+
 >                               {bucket_last_heard,{1460,147394,575294}}},
+
 >                              {"test1",{bucket_last_heard,{1460,147395,140932}}}]}]},
+
 > {'n_0@10.17.4.35',[{seconds_since_last_update,34.210637},
+
 >                     stale,
+
 >                    {type,consumer},
+
 >                    {node_last_heard,{1460,147395,141618}},
+
 >                    {buckets,[{"default",
+
 >                               {bucket_last_heard,{1460,147394,575746}}},
+
 >                              {"test1",{bucket_last_heard,{1460,147395,141612}}}]}]}]
+
 
 ## dcp_proxy
 ---
@@ -46,10 +59,16 @@ buckets to get information on ready buckets.
 Example:
 
 > kv_monitor:get_nodes().
+
 > [{'n_2@127.0.0.1',[{node_state,inactive},
+
 >                    {buckets,[{"test1",inactive},{"default",inactive}]}]},
+
 > {'n_1@127.0.0.1',[{node_state,inactive},
+
 >                   {buckets,[{"test1",inactive},{"default",inactive}]}]},
+
 > {'n_0@10.17.4.35',[{node_state,active},
+
 >                    {buckets,[{"test1",ready},{"default",ready}]}]}]
 
