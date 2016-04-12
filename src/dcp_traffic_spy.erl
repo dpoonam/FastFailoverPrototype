@@ -139,7 +139,7 @@ annotate_status(Node, Status, Now, LiveNodes) ->
             end,
     case lists:member(Node, LiveNodes) of
         true ->
-            [ {last_update_diff, timer:now_diff(Now, LastHeard)/1000} | Stale];
+            [ {seconds_since_last_update, timer:now_diff(Now, LastHeard)/1000000} | Stale];
         false ->
             [ down | Stale ]
     end.

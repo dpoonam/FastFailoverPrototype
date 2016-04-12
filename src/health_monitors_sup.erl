@@ -34,4 +34,6 @@ child_specs() ->
     [{dcp_traffic_spy, {dcp_traffic_spy, start_link, []},
       permanent, 1000, worker, [dcp_traffic_spy]},
      {kv_monitor, {kv_monitor, start_link, []},
-      permanent, 1000, worker, [kv_monitor]}].
+      permanent, 1000, worker, [kv_monitor]},
+     {node_monitor, {node_monitor, start_link, []},
+      permanent, 1000, worker, [node_monitor]}].

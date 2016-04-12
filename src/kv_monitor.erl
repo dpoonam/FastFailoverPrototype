@@ -67,7 +67,7 @@ handle_info(check_status, State) ->
             BucketList = proplists:get_value(buckets, NodeStatus),
             BAcc = lists:foldl(
                     fun ({Bucket, {bucket_last_heard, BLH}}, Acc) ->
-                        [{Bucket, get_state(BLH)} | Acc]
+                        [{Bucket, get_state(BLH), BLH} | Acc]
                     end, [], BucketList),
             NodeInfo = {Node, [{node_state, NodeState}, {buckets, BAcc}]},
             [NodeInfo | AccAll]
@@ -157,11 +157,12 @@ get_local_node_status() ->
                 end,
     BAcc = lists:foldl(
                 fun (Bucket, Acc) ->
-                    case lists:member(Bucket, ReadyBuckets) of
-                        true ->
-                            [{Bucket, ready} | Acc];
-                        false ->
-                            [{Bucket, not_ready} | Acc]
-                    end
+                    BState = case lists:member(Bucket, ReadyBuckets) of
+                                true ->
+                                    ready;
+                                false ->
+                                    not_ready
+                            end,
+                    [{Bucket, BState, erlang:now()} | Acc]
                 end, [], ActiveBuckets),
    {node(), [{node_state, NodeState}, {buckets, BAcc}]}.
