@@ -69,7 +69,6 @@ handle_info(send_heartbeat, State) ->
     ?log_debug("Status:~p ~n", [Status]),
     NewNodes = dict:from_list(Status),
     {noreply, State#state{nodes=NewNodes}};
-    %%{noreply, State};
 
 handle_info(Info, State) ->
     ?log_debug("Unexpected message ~p in state", [Info]),
