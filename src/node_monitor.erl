@@ -16,7 +16,7 @@
 -module(node_monitor).
 
 -define(INACTIVE_TIME, 5000000). % 5 seconds in microseconds
--define(HEARTBEAT_PERIOD, 1000). % 1 second
+-define(HEARTBEAT_PERIOD, 2000). % 2 second
 
 -include("ns_common.hrl").
 
@@ -65,10 +65,7 @@ handle_cast(Msg, State) ->
 handle_info(send_heartbeat, State) ->
     AllNodes = [node() | nodes()],
     Status = update_status(State, AllNodes),
-    catch misc:parallel_map(
-       fun (N) ->
-          gen_server:cast({node_monitor, N}, {heartbeat, node(), Status})
-       end, AllNodes, ?HEARTBEAT_PERIOD - 1000),
+    send_heartbeat(Status, AllNodes),
     NewNodes = dict:from_list(Status),
     {noreply, State#state{nodes=NewNodes}};
 
@@ -104,20 +101,26 @@ get_node(Node) ->
 
 %% Internal functions
 
-update_status(State, AllNodes) ->
-    update_node_status(State, AllNodes, []).
+update_status(#state{nodes=NodesDict}, AllNodes) ->
+    update_node_status(dict:to_list(NodesDict), AllNodes).
 
-update_node_status(_State, [], Acc) ->
-    Acc;
-update_node_status(#state{nodes=NodesDict} = State, [Node | Rest], Acc) ->
-    GlobalStatus = case dict:find(Node, NodesDict) of
-                    {ok, V} ->
-                        V;
-                    error ->
-                        []
-                end,
-    NewStatus = {Node, get_all_status([kv, ns_server], Node, GlobalStatus, [])},
-    update_node_status(State, Rest, [NewStatus | Acc]).
+update_node_status(NodesList, AllNodes) ->
+    ?log_debug("NodesList:~p ~n", [NodesList]),
+    ?log_debug("AllNodes:~p ~n", [AllNodes]),
+    lists:foldl(
+        fun (Node, Acc) ->
+                GlobalStatus = case lists:keyfind(Node, 1, NodesList) of
+                                false ->
+                                    [];
+                                {Node, Status} ->
+                                    Status
+                                end,
+                ?log_debug("GlobalStatus:~p ~n", [GlobalStatus]),
+                NewStatus =  get_all_status([kv, ns_server],
+                                            Node, GlobalStatus, []),
+                ?log_debug("NewStatus:~p ~n", [NewStatus]),
+                [{Node, NewStatus} | Acc]
+        end, [], AllNodes).
 
 get_all_status([], _, _, Acc) ->
     Acc;
@@ -169,7 +172,7 @@ get_ns_server_status(Node, GlobalStatus) ->
     %% This will change if we move node_monitor outside ns-server.
     case LocalNode of
         true ->
-            active;
+            {active, erlang:now()};
         false ->
             case GlobalStatus of
                 [] ->
@@ -178,3 +181,42 @@ get_ns_server_status(Node, GlobalStatus) ->
                     proplists:get_value(ns_server, GlobalStatus, unknown)
             end
     end.
+
+process_status([], _, Acc) ->
+    Acc;
+process_status([kv | Rest], Status, Acc) ->
+    case proplists:get_value(kv, Status, unknown) of
+        unknown ->
+            process_status(Rest, Status, [{kv, unknown} | Acc]);
+        Buckets ->
+            %% Time across the nodes may not be in sync.
+            %% So, we send the time diff over the wire.
+            NewStatus = lists:map(
+                            fun ({Bucket, State, LastHeard}) ->
+                                    {Bucket, State,
+                                     timer:now_diff(erlang:now(), LastHeard)}
+                            end, Buckets),
+            process_status(Rest, Status, [{kv, NewStatus} | Acc])
+    end;
+process_status([ns_server | Rest], Status, Acc) ->
+    case proplists:get_value(ns_server, Status, unknown) of
+        unknown ->
+            process_status(Rest, Status, [{ns_server, unknown} | Acc]);
+        {State, LastHeard} ->
+            NewStatus = {State, timer:now_diff(erlang:now(), LastHeard)},
+            process_status(Rest, Status, [{ns_server, NewStatus} | Acc])
+    end.
+
+process_all_status(Status) ->
+    lists:foldl(
+        fun ({Node, NodeStatus}, Acc) ->
+            NS1 = process_status([kv, ns_server], NodeStatus, []),
+            [{Node, NS1} | Acc]
+        end, [], Status).
+
+send_heartbeat(Status, AllNodes) ->
+    Status1 = process_all_status(Status),
+    catch misc:parallel_map(
+       fun (N) ->
+          gen_server:cast({node_monitor, N}, {heartbeat, node(), Status1})
+       end, AllNodes, ?HEARTBEAT_PERIOD - 10).
