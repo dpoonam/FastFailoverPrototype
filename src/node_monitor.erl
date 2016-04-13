@@ -55,6 +55,9 @@ handle_call({get_node, Node}, _From, #state{nodes=Nodes} = State) ->
 handle_call(get_nodes, _From, #state{nodes=Nodes} = State) ->
     {reply, dict:to_list(Nodes), State}.
 
+handle_cast({heartbeat, Node, Status}, State) ->
+    ?log_debug("Received heartbeat from ~p ~n ~p ", [Node, Status]),
+    {noreply, State};
 handle_cast(Msg, State) ->
     ?log_debug("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
@@ -62,11 +65,10 @@ handle_cast(Msg, State) ->
 handle_info(send_heartbeat, State) ->
     AllNodes = [node() | nodes()],
     Status = update_status(State, AllNodes),
-    %%catch misc:parallel_map(
-     %%   fun (N) ->
-      %%      gen_server:cast({node_monitor, N}, {heartbeat, node(), Status})
-       %% end, AllNodes, ?HEARTBEAT_PERIOD - 1000),
-    ?log_debug("Status:~p ~n", [Status]),
+    catch misc:parallel_map(
+       fun (N) ->
+          gen_server:cast({node_monitor, N}, {heartbeat, node(), Status})
+       end, AllNodes, ?HEARTBEAT_PERIOD - 1000),
     NewNodes = dict:from_list(Status),
     {noreply, State#state{nodes=NewNodes}};
 
@@ -108,60 +110,60 @@ update_status(State, AllNodes) ->
 update_node_status(_State, [], Acc) ->
     Acc;
 update_node_status(#state{nodes=NodesDict} = State, [Node | Rest], Acc) ->
-    PrevStatus = case dict:find(Node, NodesDict) of
+    GlobalStatus = case dict:find(Node, NodesDict) of
                     {ok, V} ->
                         V;
                     error ->
                         []
                 end,
-    NewStatus = {Node, get_all_status([kv, ns_server], Node, PrevStatus, [])},
+    NewStatus = {Node, get_all_status([kv, ns_server], Node, GlobalStatus, [])},
     update_node_status(State, Rest, [NewStatus | Acc]).
 
 get_all_status([], _, _, Acc) ->
     Acc;
-get_all_status([kv | Rest], Node, PrevStatus, Acc) ->
-    KVStatus = {kv, get_bucket_status(Node, PrevStatus)},
-    ?log_debug("KVStatus:~p ~n", [KVStatus]),
-    get_all_status(Rest, Node, PrevStatus, [KVStatus | Acc]);
-get_all_status([ns_server | Rest], Node, PrevStatus, Acc) ->
-    NSStatus = {ns_server, get_ns_server_status(Node, PrevStatus)},
-    ?log_debug("NSStatus:~p ~n", [NSStatus]),
-    get_all_status(Rest, Node, PrevStatus, [NSStatus | Acc]).
+get_all_status([kv | Rest], Node, GlobalStatus, Acc) ->
+    KVStatus = {kv, get_bucket_status(Node, GlobalStatus)},
+    get_all_status(Rest, Node, GlobalStatus, [KVStatus | Acc]);
+get_all_status([ns_server | Rest], Node, GlobalStatus, Acc) ->
+    NSStatus = {ns_server, get_ns_server_status(Node, GlobalStatus)},
+    get_all_status(Rest, Node, GlobalStatus, [NSStatus | Acc]).
 
-%% For a node, say Node A, some remote node might have more uptodate view
-%% of the state of buckets on Node A than we do.
-%% If local node's view of Node A's buckets is more current then return
-%% that info.
-get_bucket_status(Node, PrevStatus) ->
-    PrevKVStatus = proplists:get_value(kv, PrevStatus, unknown),
+get_bucket_status(Node, GlobalStatus) ->
+    GlobalBuckets = proplists:get_value(kv, GlobalStatus, unknown),
     case kv_monitor:get_node(Node) of
         [] ->
-            PrevKVStatus;
-        KVStatus ->
-            BucketStatus = proplists:get_value(buckets, KVStatus, unknown),
-            case PrevKVStatus of
+            %% Local node is not monitoring KV status for this Node.
+            GlobalBuckets;
+        LocalKV ->
+            LocalBuckets = proplists:get_value(buckets, LocalKV, unknown),
+            case GlobalBuckets of
                 unknown ->
-                    BucketStatus;
+                    LocalBuckets;
                 _ ->
-                    PBStatus = proplists:get_value(buckets, PrevKVStatus),
-                    get_bucket_status_inner(BucketStatus, PBStatus)
+                    get_latest_bucket_status(LocalBuckets, GlobalBuckets)
             end
     end.
 
-get_bucket_status_inner(BucketStatus, PBStatus) ->
-    lists:map(
-        fun ({Bucket, _State, LastHeard} = BStatus) ->
-                case lists:keyfind(Bucket, 1, PBStatus) of
-                    false ->
-                       BStatus;
-                    {_, _, PrevLastHeard} = PrevStatus ->
-                            if LastHeard >= PrevLastHeard -> BStatus;
-                               LastHeard < PrevLastHeard -> PrevStatus
-                            end
-                end
-        end, BucketStatus).
+%% For a node, say Node A, some remote node might have more uptodate view
+%% of the state of buckets on Node A than we do.
+%% Compare the global view with the local one and return the most current
+%% info.
+get_latest_bucket_status(LocalBuckets, GlobalBuckets) ->
+    {LB, GB} = lists:foldl(
+           fun ({Bucket, _, LastHeard} = LocalBucket, {AccL, AccG}) ->
+                   case lists:keyfind(Bucket, 1, GlobalBuckets) of
+                       false ->
+                          {[LocalBucket | AccL], AccG};
+                       {_, _, GlobalLastHeard} = GlobalBucket ->
+                               RB = if LastHeard >= GlobalLastHeard -> LocalBucket;
+                                  LastHeard < GlobalLastHeard -> GlobalBucket
+                               end,
+                                {[RB | AccL], lists:keydelete(Bucket, 1, AccG)}
+                   end
+           end, {[], GlobalBuckets}, LocalBuckets),
+    LB ++ GB.
 
-get_ns_server_status(Node, PrevStatus) ->
+get_ns_server_status(Node, GlobalStatus) ->
     LocalNode = Node =:= node(),
     %% ns-server is active for local node.
     %% This will change if we move node_monitor outside ns-server.
@@ -169,10 +171,10 @@ get_ns_server_status(Node, PrevStatus) ->
         true ->
             active;
         false ->
-            case PrevStatus of
+            case GlobalStatus of
                 [] ->
                     unknown;
                 _ ->
-                    proplists:get_value(ns_server, PrevStatus, unknown)
+                    proplists:get_value(ns_server, GlobalStatus, unknown)
             end
     end.
