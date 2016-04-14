@@ -16,7 +16,6 @@
 -module(node_monitor).
 
 -define(HEARTBEAT_PERIOD, 2000). % 2 second
-
 -include("ns_common.hrl").
 
 -behaviour(gen_server).
@@ -230,14 +229,25 @@ process_all_status(Status) ->
             [{Node, NS1} | Acc]
         end, [], Status).
 
+skip_heartbeats_to() ->
+    case testpoint:get(skip_heartbeat_to) of
+        false ->
+            [];
+        SkipList ->
+            SkipList
+    end.
 send_heartbeat(Status, NodesWanted) ->
     %% TODO: Call process_all_status to adjust for time difference among nodes.
     %% Currently assuming that clock on all nodes is in sync.
     %% Status1 = process_all_status(Status),
+    SkipList = skip_heartbeats_to(),
+    SendList = NodesWanted -- SkipList,
+    ?log_debug("Skipping heartbeats to ~p ~n", [SkipList]),
+    ?log_debug("Sending heartbeats to ~p ~n", [SendList]),
     catch misc:parallel_map(
        fun (N) ->
-          gen_server:cast({?MODULE, N}, {heartbeat, node(), Status})
-       end, NodesWanted, ?HEARTBEAT_PERIOD - 10).
+            gen_server:cast({?MODULE, N}, {heartbeat, node(), Status})
+       end, SendList, ?HEARTBEAT_PERIOD - 10).
 
 process_heartbeat(Node, Status, NodesWanted) ->
     ns_server_monitor:update_node_status(Node),

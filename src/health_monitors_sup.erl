@@ -37,5 +37,7 @@ child_specs() ->
       permanent, 1000, worker, [kv_monitor]},
      {ns_server_monitor, {ns_server_monitor, start_link, []},
       permanent, 1000, worker, [ns_server_monitor]},
+     {testpoints_store, {simple_store, start_link, [testpoints]},
+      permanent, 1000, worker, []},
      {node_monitor, {node_monitor, start_link, []},
       permanent, 1000, worker, [node_monitor]}].
