@@ -28,7 +28,8 @@
 -export([get_nodes/0, get_node/1, update_node_status/1]).
 
 -record(state, {
-          nodes :: dict()
+          nodes :: dict(),
+          nodes_wanted :: [node()]
          }).
 
 %% gen_server handlers
@@ -40,7 +41,15 @@ init([]) ->
     erlang:process_flag(priority, high),
     timer2:send_interval(?CHECK_STATUS_PERIOD, check_status),
     self() ! check_status,
-    {ok, #state{nodes=dict:new()}}.
+    ns_pubsub:subscribe_link(ns_config_events, fun handle_config_event/2),
+    {ok, #state{nodes=dict:new(),
+                nodes_wanted=ns_node_disco:nodes_wanted()}}.
+
+handle_config_event({nodes_wanted, _} = Msg, State) ->
+    ns_server_monitor ! Msg,
+    State;
+handle_config_event(_, State) ->
+    State.
 
 handle_call({get_node, Node}, _From, #state{nodes=Nodes} = State) ->
     RV = case dict:find(Node, Nodes) of
@@ -62,8 +71,8 @@ handle_cast(Msg, State) ->
     ?log_debug("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info(check_status, #state{nodes=Nodes} = State) ->
-    AllNodes = [node() | nodes()],
+handle_info(check_status,
+            #state{nodes=Nodes, nodes_wanted = NodesWanted} = State) ->
     NewList = lists:foldl(
                     fun (Node, Acc) ->
                         LocalNode = Node =:= node(),
@@ -79,9 +88,14 @@ handle_info(check_status, #state{nodes=Nodes} = State) ->
                                     end
                             end,
                         [{Node, NS} | Acc]
-                    end, [], AllNodes),
+                    end, [], NodesWanted),
     NewNodes = dict:from_list(NewList),
     {noreply, State#state{nodes=NewNodes}};
+
+handle_info({nodes_wanted, NewNodes0}, #state{nodes=Statuses} = State) ->
+    {NewNodes, NewStatuses} = health_monitor:process_nodes_wanted(NewNodes0,
+                                                                  Statuses),
+    {noreply, State#state{nodes=NewStatuses, nodes_wanted=NewNodes}};
 
 handle_info(Info, State) ->
     ?log_debug("Unexpected message ~p in state", [Info]),

@@ -28,7 +28,8 @@
 -export([get_nodes/0, get_node/1]).
 
 -record(state, {
-          nodes :: dict()
+          nodes :: dict(),
+          nodes_wanted :: [node()]
          }).
 
 %% gen_server handlers
@@ -40,7 +41,16 @@ init([]) ->
     erlang:process_flag(priority, high),
     timer2:send_interval(?HEARTBEAT_PERIOD, send_heartbeat),
     self() ! send_heartbeat,
-    {ok, #state{nodes=dict:new()}}.
+    ns_pubsub:subscribe_link(ns_config_events, fun handle_config_event/2),
+    {ok, #state{nodes=dict:new(),
+                nodes_wanted=ns_node_disco:nodes_wanted()}}.
+
+
+handle_config_event({nodes_wanted, _} = Msg, State) ->
+    node_monitor ! Msg,
+    State;
+handle_config_event(_, State) ->
+    State.
 
 handle_call({get_node, Node}, _From, #state{nodes=Nodes} = State) ->
     RV = case dict:find(Node, Nodes) of
@@ -54,22 +64,26 @@ handle_call({get_node, Node}, _From, #state{nodes=Nodes} = State) ->
 handle_call(get_nodes, _From, #state{nodes=Nodes} = State) ->
     {reply, dict:to_list(Nodes), State}.
 
-handle_cast({heartbeat, Node, Status}, State) ->
+handle_cast({heartbeat, Node, Status},
+            #state{nodes_wanted = NodesWanted} = State) ->
     ?log_debug("Received heartbeat from ~p ~n ~p ", [Node, Status]),
-    NewStatus = process_heartbeat(Node, Status),
+    NewStatus = process_heartbeat(Node, Status, NodesWanted),
     NewNodes = dict:from_list(NewStatus),
     {noreply, State#state{nodes=NewNodes}};
 handle_cast(Msg, State) ->
     ?log_debug("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info(send_heartbeat, State) ->
-    AllNodes = [node() | nodes()],
-    Status = update_status(State, AllNodes),
-    send_heartbeat(Status, AllNodes),
-    NewNodes = dict:from_list(Status),
-    {noreply, State#state{nodes=NewNodes}};
+handle_info(send_heartbeat, #state{nodes_wanted = NodesWanted} = State) ->
+    Status = update_status(State, NodesWanted),
+    send_heartbeat(Status, NodesWanted),
+    NewStatus = dict:from_list(Status),
+    {noreply, State#state{nodes=NewStatus}};
 
+handle_info({nodes_wanted, NewNodes0}, #state{nodes=Statuses} = State) ->
+    {NewNodes, NewStatuses} = health_monitor:process_nodes_wanted(NewNodes0,
+                                                                  Statuses),
+    {noreply, State#state{nodes=NewStatuses, nodes_wanted=NewNodes}};
 handle_info(Info, State) ->
     ?log_debug("Unexpected message ~p in state", [Info]),
     {noreply, State}.
@@ -102,10 +116,10 @@ get_node(Node) ->
 
 %% Internal functions
 
-update_status(#state{nodes=NodesDict}, AllNodes) ->
-    update_node_status(dict:to_list(NodesDict), AllNodes).
+update_status(#state{nodes=NodesDict}, NodesWanted) ->
+    update_node_status(dict:to_list(NodesDict), NodesWanted).
 
-update_node_status(NodesList, AllNodes) ->
+update_node_status(NodesList, NodesWanted) ->
     lists:foldl(
         fun (Node, Acc) ->
                 GlobalStatus = case lists:keyfind(Node, 1, NodesList) of
@@ -117,7 +131,7 @@ update_node_status(NodesList, AllNodes) ->
                 NewStatus =  get_all_status([kv, ns_server],
                                             Node, GlobalStatus, []),
                 [{Node, NewStatus} | Acc]
-        end, [], AllNodes).
+        end, [], NodesWanted).
 
 get_all_status([], _, _, Acc) ->
     Acc;
@@ -216,15 +230,15 @@ process_all_status(Status) ->
             [{Node, NS1} | Acc]
         end, [], Status).
 
-send_heartbeat(Status, AllNodes) ->
+send_heartbeat(Status, NodesWanted) ->
     %% TODO: Call process_all_status to adjust for time difference among nodes.
     %% Currently assuming that clock on all nodes is in sync.
     %% Status1 = process_all_status(Status),
     catch misc:parallel_map(
        fun (N) ->
           gen_server:cast({?MODULE, N}, {heartbeat, node(), Status})
-       end, AllNodes, ?HEARTBEAT_PERIOD - 10).
+       end, NodesWanted, ?HEARTBEAT_PERIOD - 10).
 
-process_heartbeat(Node, Status) ->
+process_heartbeat(Node, Status, NodesWanted) ->
     ns_server_monitor:update_node_status(Node),
-    update_node_status(Status, [node() | nodes()]).
+    update_node_status(Status, NodesWanted).

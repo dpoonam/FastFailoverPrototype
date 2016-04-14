@@ -20,7 +20,8 @@
 -include("ns_common.hrl").
 
 %% API
--export([get_state/1]).
+-export([get_state/1,
+         process_nodes_wanted/2]).
 
 get_state(LastHeard) ->
     Diff = timer:now_diff(erlang:now(), LastHeard),
@@ -28,3 +29,12 @@ get_state(LastHeard) ->
        Diff > ?INACTIVE_TIME -> inactive
     end.
 
+process_nodes_wanted(Nodes, Status) ->
+    NewNodes = lists:sort(Nodes),
+    CurrentNodes = lists:sort(dict:fetch_keys(Status)),
+    ToRemove = ordsets:subtract(CurrentNodes, NewNodes),
+    NewStatus = lists:foldl(
+          fun (Node, Acc) ->
+                  dict:erase(Node, Acc)
+          end, Status, ToRemove),
+    {NewNodes, NewStatus}.
