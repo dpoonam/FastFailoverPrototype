@@ -15,7 +15,6 @@
 %%
 -module(kv_monitor).
 
--define(INACTIVE_TIME, 5000000). % 5 seconds in microseconds
 -define(CHECK_STATUS_PERIOD, 1000). % 1 second
 
 -include("ns_common.hrl").
@@ -63,11 +62,11 @@ handle_info(check_status, State) ->
     Nodes = dcp_traffic_spy:get_nodes(),
     Fun = fun ({Node, NodeStatus}, AccAll) ->
             LastHeard = proplists:get_value(node_last_heard, NodeStatus),
-            NodeState = get_state(LastHeard),
+            NodeState = health_monitor:get_state(LastHeard),
             BucketList = proplists:get_value(buckets, NodeStatus),
             BAcc = lists:foldl(
                     fun ({Bucket, {bucket_last_heard, BLH}}, Acc) ->
-                        [{Bucket, get_state(BLH), BLH} | Acc]
+                        [{Bucket, health_monitor:get_state(BLH), BLH} | Acc]
                     end, [], BucketList),
             NodeInfo = {Node, [{node_state, NodeState}, {buckets, BAcc}]},
             [NodeInfo | AccAll]
@@ -111,12 +110,6 @@ get_node(Node) ->
     end.
 
 %% Internal functions
-
-get_state(LastHeard) ->
-    Diff = timer:now_diff(erlang:now(), LastHeard),
-    if Diff =< ?INACTIVE_TIME -> active;
-       Diff > ?INACTIVE_TIME -> inactive
-    end.
 
 check_local_node_status(Nodes) ->
     case lists:keyfind(node(), 1, Nodes) of

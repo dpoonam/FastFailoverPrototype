@@ -1,5 +1,5 @@
 %% @author Couchbase <info@couchbase.com>
-%% @copyright 2014 Couchbase, Inc.
+%% @copyright 2016 Couchbase, Inc.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -35,5 +35,7 @@ child_specs() ->
       permanent, 1000, worker, [dcp_traffic_spy]},
      {kv_monitor, {kv_monitor, start_link, []},
       permanent, 1000, worker, [kv_monitor]},
+     {ns_server_monitor, {ns_server_monitor, start_link, []},
+      permanent, 1000, worker, [ns_server_monitor]},
      {node_monitor, {node_monitor, start_link, []},
       permanent, 1000, worker, [node_monitor]}].

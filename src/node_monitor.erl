@@ -15,7 +15,6 @@
 %%
 -module(node_monitor).
 
--define(INACTIVE_TIME, 5000000). % 5 seconds in microseconds
 -define(HEARTBEAT_PERIOD, 2000). % 2 second
 
 -include("ns_common.hrl").
@@ -57,7 +56,9 @@ handle_call(get_nodes, _From, #state{nodes=Nodes} = State) ->
 
 handle_cast({heartbeat, Node, Status}, State) ->
     ?log_debug("Received heartbeat from ~p ~n ~p ", [Node, Status]),
-    {noreply, State};
+    NewStatus = process_heartbeat(Node, Status),
+    NewNodes = dict:from_list(NewStatus),
+    {noreply, State#state{nodes=NewNodes}};
 handle_cast(Msg, State) ->
     ?log_debug("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
@@ -105,8 +106,6 @@ update_status(#state{nodes=NodesDict}, AllNodes) ->
     update_node_status(dict:to_list(NodesDict), AllNodes).
 
 update_node_status(NodesList, AllNodes) ->
-    ?log_debug("NodesList:~p ~n", [NodesList]),
-    ?log_debug("AllNodes:~p ~n", [AllNodes]),
     lists:foldl(
         fun (Node, Acc) ->
                 GlobalStatus = case lists:keyfind(Node, 1, NodesList) of
@@ -115,10 +114,8 @@ update_node_status(NodesList, AllNodes) ->
                                 {Node, Status} ->
                                     Status
                                 end,
-                ?log_debug("GlobalStatus:~p ~n", [GlobalStatus]),
                 NewStatus =  get_all_status([kv, ns_server],
                                             Node, GlobalStatus, []),
-                ?log_debug("NewStatus:~p ~n", [NewStatus]),
                 [{Node, NewStatus} | Acc]
         end, [], AllNodes).
 
@@ -167,18 +164,23 @@ get_latest_bucket_status(LocalBuckets, GlobalBuckets) ->
     LB ++ GB.
 
 get_ns_server_status(Node, GlobalStatus) ->
-    LocalNode = Node =:= node(),
-    %% ns-server is active for local node.
-    %% This will change if we move node_monitor outside ns-server.
-    case LocalNode of
-        true ->
-            {active, erlang:now()};
-        false ->
-            case GlobalStatus of
-                [] ->
-                    unknown;
-                _ ->
-                    proplists:get_value(ns_server, GlobalStatus, unknown)
+    LocalState = ns_server_monitor:get_node(Node),
+    case GlobalStatus of
+        [] ->
+            LocalState;
+        _ ->
+            case proplists:get_value(ns_server, GlobalStatus, unknown) of
+                unknown ->
+                    LocalState;
+                {_, GlobalLastHeard} = GlobalState ->
+                    case LocalState of
+                        unknown ->
+                            GlobalState;
+                        {_, LastHeard} ->
+                            if LastHeard >= GlobalLastHeard -> LocalState;
+                               LastHeard < GlobalLastHeard -> GlobalState
+                            end
+                    end
             end
     end.
 
@@ -215,8 +217,14 @@ process_all_status(Status) ->
         end, [], Status).
 
 send_heartbeat(Status, AllNodes) ->
-    Status1 = process_all_status(Status),
+    %% TODO: Call process_all_status to adjust for time difference among nodes.
+    %% Currently assuming that clock on all nodes is in sync.
+    %% Status1 = process_all_status(Status),
     catch misc:parallel_map(
        fun (N) ->
-          gen_server:cast({node_monitor, N}, {heartbeat, node(), Status1})
+          gen_server:cast({?MODULE, N}, {heartbeat, node(), Status})
        end, AllNodes, ?HEARTBEAT_PERIOD - 10).
+
+process_heartbeat(Node, Status) ->
+    ns_server_monitor:update_node_status(Node),
+    update_node_status(Status, [node() | nodes()]).
