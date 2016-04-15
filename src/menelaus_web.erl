@@ -1558,7 +1558,6 @@ build_nodes_info_fun(CanIncludeOtpCookie, InfoLevel, Stability, LocalAddr) ->
 
             %%Status = build_node_status(WantENode, Bucket, InfoNode, BucketsAll),
             Status = node_monitor:get_node_status(WantENode),
-            ?log_debug("Node status:~p ~n", [Status]),
             KV1 = [{clusterMembership,
                     atom_to_binary(
                       ns_cluster_membership:get_cluster_membership(

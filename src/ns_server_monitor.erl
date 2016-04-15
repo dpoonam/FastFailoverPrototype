@@ -56,7 +56,7 @@ handle_call({get_node, Node}, _From, #state{nodes=Nodes} = State) ->
              {ok, Status} ->
                  Status;
              _ ->
-                 []
+                unknown 
          end,
     {reply, RV, State};
 

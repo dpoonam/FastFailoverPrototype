@@ -205,16 +205,11 @@ get_ns_server_status(Node, GlobalStatus) ->
             case proplists:get_value(ns_server, GlobalStatus, unknown) of
                 unknown ->
                     LocalState;
+                [] ->
+                    LocalState;
                 {_, GlobalLastHeard} = GlobalState ->
                     case LocalState of
                         unknown ->
-                            GlobalState;
-                        [] ->
-                            %% This is for the case where a node, say NodeA is
-                            %% removed from the cluster.
-                            %% If ns-server processes the nodes_wanted
-                            %% ns_config event before the node_monitor,
-                            %% the LocalState for node A will be [].
                             GlobalState;
                         {_, LastHeard} ->
                             if LastHeard >= GlobalLastHeard -> LocalState;
@@ -305,7 +300,6 @@ get_kv_state(Node, Status) ->
                                             false
                                     end
                                 end, BucketList),
-            ?log_debug("NodeBuckets:~p ReadyBuckets:~p ~n", [NodeBuckets, ReadyBuckets]),
             case ordsets:is_subset(lists:sort(NodeBuckets),
                                    lists:sort(ReadyBuckets)) of
                 true ->
