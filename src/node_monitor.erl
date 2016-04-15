@@ -24,7 +24,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 %% API
--export([get_nodes/0, get_node/1]).
+-export([get_nodes/0, get_node/1, get_node_status/1]).
 
 -record(state, {
           nodes :: dict(),
@@ -50,6 +50,18 @@ handle_config_event({nodes_wanted, _} = Msg, State) ->
     State;
 handle_config_event(_, State) ->
     State.
+
+%% TODO: Move to node status analyzer. Also breakup the function.
+handle_call({get_node_status, Node}, _From, #state{nodes=Nodes} = State) ->
+    RV = case dict:find(Node, Nodes) of
+             {ok, Status} ->
+                NSState = get_ns_server_state(Status),
+                KVState = get_kv_state(Node, Status),
+                get_node_state(NSState, KVState);
+             _ ->
+                <<"unhealthy">>
+         end,
+    {reply, RV, State};
 
 handle_call({get_node, Node}, _From, #state{nodes=Nodes} = State) ->
     RV = case dict:find(Node, Nodes) of
@@ -113,6 +125,14 @@ get_node(Node) ->
             []
     end.
 
+get_node_status(Node) ->
+    try gen_server:call(?MODULE, {get_node_status, Node}) of
+        Status -> Status
+    catch
+        E:R ->
+            ?log_debug("Error attempting to get node ~p: ~p", [Node, {E, R}]),
+            []
+    end.
 %% Internal functions
 
 update_status(#state{nodes=NodesDict}, NodesWanted) ->
@@ -189,6 +209,13 @@ get_ns_server_status(Node, GlobalStatus) ->
                     case LocalState of
                         unknown ->
                             GlobalState;
+                        [] ->
+                            %% This is for the case where a node, say NodeA is
+                            %% removed from the cluster.
+                            %% If ns-server processes the nodes_wanted
+                            %% ns_config event before the node_monitor,
+                            %% the LocalState for node A will be [].
+                            GlobalState;
                         {_, LastHeard} ->
                             if LastHeard >= GlobalLastHeard -> LocalState;
                                LastHeard < GlobalLastHeard -> GlobalState
@@ -252,3 +279,59 @@ send_heartbeat(Status, NodesWanted) ->
 process_heartbeat(Node, Status, NodesWanted) ->
     ns_server_monitor:update_node_status(Node),
     update_node_status(Status, NodesWanted).
+
+get_ns_server_state(Status) ->
+    case proplists:get_value(ns_server, Status, unknown) of
+        unknown ->
+            inactive;
+        {State, _} ->
+            State
+    end.
+
+get_kv_state(Node, Status) ->
+    case proplists:get_value(kv, Status, unknown) of
+        unknown ->
+            inactive;
+        BucketList ->
+            NodeBuckets = ns_bucket:node_bucket_names(Node),
+            ReadyBuckets = lists:filtermap(
+                                fun ({Bucket, State, _}) ->
+                                   case State of
+                                        active ->
+                                            {true, Bucket};
+                                        ready ->
+                                            {true, Bucket};
+                                        _ ->
+                                            false
+                                    end
+                                end, BucketList),
+            ?log_debug("NodeBuckets:~p ReadyBuckets:~p ~n", [NodeBuckets, ReadyBuckets]),
+            case ordsets:is_subset(lists:sort(NodeBuckets),
+                                   lists:sort(ReadyBuckets)) of
+                true ->
+                    active;
+                false ->
+                    case ReadyBuckets of
+                        [] ->
+                            warmup;
+                        _ ->
+                            partial_ready
+                    end
+            end
+    end.
+
+%% TODO: Rewrite.
+%% Compare ns-server and KV state and return appropriate node state.
+%% get_node_state(ns_server_state, kv_state)
+get_node_state(active, active) ->
+    <<"healthy">>;
+get_node_state(active, warmup) ->
+    <<"warmup">>;
+get_node_state(active, partial_ready) ->
+    <<"warmup">>;
+get_node_state(active, inactive) ->
+    <<"needs_attention">>;
+get_node_state(inactive, inactive) ->
+    <<"unhealthy">>;
+get_node_state(inactive, _) ->
+    <<"needs_attention">>.
