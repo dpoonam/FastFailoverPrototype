@@ -333,5 +333,7 @@ get_node_state(active, inactive) ->
     <<"needs_attention">>;
 get_node_state(inactive, inactive) ->
     <<"unhealthy">>;
+get_node_state(inactive, warmup) ->
+    <<"unhealthy">>;
 get_node_state(inactive, _) ->
     <<"needs_attention">>.
