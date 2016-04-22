@@ -15,7 +15,7 @@
 %%
 -module(node_monitor).
 
--define(HEARTBEAT_PERIOD, 2000). % 2 second
+-define(HEARTBEAT_PERIOD, 1000). % 1 second
 -include("ns_common.hrl").
 
 -behaviour(gen_server).
