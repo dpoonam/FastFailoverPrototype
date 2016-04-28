@@ -96,7 +96,7 @@
          validate_by_fun/3,
          execute_if_validated/3]).
 
--define(AUTO_FAILLOVER_MIN_TIMEOUT, 30).
+-define(AUTO_FAILLOVER_MIN_TIMEOUT, 0).
 -define(AUTO_FAILLOVER_MAX_TIMEOUT, 3600).
 -define(PLUGGABLE_UI, "_p").
 

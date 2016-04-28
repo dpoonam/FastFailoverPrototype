@@ -138,7 +138,6 @@ update_local_node_status(Nodes) ->
     lists:keyreplace(node(), 1, Nodes, get_local_node_status()).
 
 get_local_node_status() ->
-    ?log_debug("Getting local node status from ns_memcached ~n"),
     ActiveBuckets = ns_memcached:active_buckets(),
     ReadyBuckets = ns_memcached:warmed_buckets(),
     %% Node is considered active if atleast one bucket is ready.

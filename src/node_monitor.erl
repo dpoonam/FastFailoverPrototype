@@ -77,7 +77,6 @@ handle_call(get_nodes, _From, #state{nodes=Nodes} = State) ->
 
 handle_cast({heartbeat, Node, Status},
             #state{nodes_wanted = NodesWanted} = State) ->
-    ?log_debug("Received heartbeat from ~p ~n ~p ", [Node, Status]),
     NewStatus = process_heartbeat(Node, Status, NodesWanted),
     NewNodes = dict:from_list(NewStatus),
     {noreply, State#state{nodes=NewNodes}};
@@ -264,8 +263,6 @@ send_heartbeat(Status, NodesWanted) ->
     %% Status1 = process_all_status(Status),
     SkipList = skip_heartbeats_to(),
     SendList = NodesWanted -- SkipList,
-    ?log_debug("Skipping heartbeats to ~p ~n", [SkipList]),
-    ?log_debug("Sending heartbeats to ~p ~n", [SendList]),
     catch misc:parallel_map(
        fun (N) ->
             gen_server:cast({?MODULE, N}, {heartbeat, node(), Status})
