@@ -23,6 +23,9 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
+-import(health_monitor,
+        [all_monitors/0,
+         monitor_module/1]).
 %% API
 -export([get_nodes/0, get_node/1, get_node_status/1,
          get_cluster_status/0]).
@@ -158,47 +161,18 @@ get_cluster_status() ->
             ?log_debug("Error attempting to get cluster view ~p", [{E, R}]),
             []
     end.
-%% Internal functions
 
+%% Internal functions
 update_status(NodesWanted) ->
     lists:foldl(
         fun (Node, Acc) ->
-                NewStatus = get_all_status(all_monitors(), Node, []),
+                NewStatus = lists:foldl(
+                                fun (Monitor, MAcc) ->
+                                    Module = monitor_module(Monitor),
+                                    [{Monitor, Module:get_status(Node)} | MAcc]
+                                end, [], all_monitors()),
                 [{Node, NewStatus} | Acc]
         end, [], NodesWanted).
-
-get_all_status([], _, Acc) ->
-    Acc;
-get_all_status([kv | Rest], Node, Acc) ->
-    KVStatus = {kv, get_bucket_status(Node)},
-    get_all_status(Rest, Node, [KVStatus | Acc]);
-get_all_status([ns_server | Rest], Node, Acc) ->
-    NSStatus = {ns_server, get_ns_server_status(Node)},
-    get_all_status(Rest, Node, [NSStatus | Acc]).
-
-get_bucket_status(Node) ->
-    case kv_monitor:get_node(Node) of
-        [] ->
-            %% Local node is not monitoring KV status for this Node.
-            [];
-        [_, {buckets, BucketList}] ->
-            lists:foldl(
-                fun ({Bucket, State, LastHeard}, Acc) ->
-                   [{Bucket, State, update_ts(LastHeard)} | Acc]
-                end, [], BucketList)
-    end.
-
-get_ns_server_status(Node) ->
-    case ns_server_monitor:get_node(Node) of
-        unknown ->
-            [];
-        {State, LastHeard} ->
-            {State, update_ts(LastHeard)}
-    end.
-
-%% Replace last heard time stamp with time difference
-update_ts(LastHeard) ->
-    timer:now_diff(erlang:now(), LastHeard).
 
 skip_heartbeats_to() ->
     case testpoint:get(skip_heartbeat_to) of
@@ -276,6 +250,3 @@ get_node_state(inactive, warmup) ->
 get_node_state(inactive, _) ->
     <<"needs_attention">>.
 
-
-all_monitors() ->
-    [kv, ns_server].

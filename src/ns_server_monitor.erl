@@ -25,7 +25,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 %% API
--export([get_nodes/0, get_node/1, update_node_status/1]).
+-export([get_nodes/0, get_node/1, update_node_status/1,
+         get_status/1]).
 
 -record(state, {
           nodes :: dict(),
@@ -134,4 +135,12 @@ update_node_status(Node) ->
         E:R ->
             ?log_debug("Error attempting to update node ~p: ~p", [Node, {E, R}]),
             []
+    end.
+
+get_status(Node) ->
+    case get_node(Node) of
+        unknown ->
+            [];
+        {State, LastHeard} ->
+            {State, health_monitor:update_ts(LastHeard)}
     end.

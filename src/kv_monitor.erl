@@ -25,7 +25,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 %% API
--export([get_nodes/0, get_node/1]).
+-export([get_nodes/0, get_node/1, get_status/1]).
 
 -record(state, {
           nodes :: dict()
@@ -109,6 +109,18 @@ get_node(Node) ->
             []
     end.
 
+get_status(Node) ->
+    case get_node(Node) of
+        [] ->
+            %% Local node is not monitoring KV status for this Node.
+            [];
+        [_, {buckets, BucketList}] ->
+            lists:foldl(
+                fun ({Bucket, State, LastHeard}, Acc) ->
+                   [{Bucket, State, health_monitor:update_ts(LastHeard)} | Acc]
+                end, [], BucketList)
+    end.
+
 %% Internal functions
 
 check_local_node_status(Nodes) ->
@@ -163,3 +175,4 @@ get_local_node_status() ->
                     [{Bucket, BState, erlang:now()} | Acc]
                 end, [], ActiveBuckets),
    {node(), [{node_state, NodeState}, {buckets, BAcc}]}.
+

@@ -15,13 +15,10 @@
 %%
 -module(health_monitor).
 
--define(INACTIVE_TIME, 5000000). % 5 seconds in microseconds
+-define(INACTIVE_TIME, 2000000). % 2 seconds in microseconds
 
+-compile(export_all).
 -include("ns_common.hrl").
-
-%% API
--export([get_state/1,
-         process_nodes_wanted/2]).
 
 get_state(LastHeard) ->
     Diff = timer:now_diff(erlang:now(), LastHeard),
@@ -38,3 +35,13 @@ process_nodes_wanted(Nodes, Status) ->
                   dict:erase(Node, Acc)
           end, Status, ToRemove),
     {NewNodes, NewStatus}.
+
+%% Replace last heard time stamp with time difference
+update_ts(LastHeard) ->
+    timer:now_diff(erlang:now(), LastHeard).
+
+all_monitors() ->
+    [kv, ns_server].
+
+monitor_module(Monitor) ->
+    list_to_atom(atom_to_list(Monitor) ++ "_monitor").
