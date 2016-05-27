@@ -24,7 +24,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 %% API
--export([get_nodes/0, get_node/1, get_node_status/1]).
+-export([get_nodes/0, get_node/1, get_node_status/1,
+         get_cluster_status/0]).
 
 -record(state, {
           nodes :: dict(),
@@ -40,7 +41,7 @@ init([]) ->
     erlang:process_flag(priority, high),
     timer2:send_interval(?HEARTBEAT_PERIOD, send_heartbeat),
     self() ! send_heartbeat,
-    ns_pubsub:subscribe_link(ns_config_events, fun handle_config_event/2),
+    ns_pubsub:subscribe_link(ns_config_events, fun handle_config_event/2, empty),
     {ok, #state{nodes=dict:new(),
                 nodes_wanted=ns_node_disco:nodes_wanted()}}.
 
@@ -53,42 +54,58 @@ handle_config_event(_, State) ->
 
 %% TODO: Move to node status analyzer. Also breakup the function.
 handle_call({get_node_status, Node}, _From, #state{nodes=Nodes} = State) ->
-    RV = case dict:find(Node, Nodes) of
+    %% Get local node's view of the status of the specified Node.
+    RV = case dict:find(node(), Nodes) of
              {ok, Status} ->
-                NSState = get_ns_server_state(Status),
-                KVState = get_kv_state(Node, Status),
-                get_node_state(NSState, KVState);
+                case lists:keyfind(Node, 1, Status) of
+                    false ->
+                        <<"unhealthy">>;
+                    {Node, NodeStatus} ->
+                      NSState = get_ns_server_state(NodeStatus),
+                      KVState = get_kv_state(Node, NodeStatus),
+                      get_node_state(NSState, KVState)
+                end;
              _ ->
                 <<"unhealthy">>
          end,
     {reply, RV, State};
 
 handle_call({get_node, Node}, _From, #state{nodes=Nodes} = State) ->
-    RV = case dict:find(Node, Nodes) of
+    %% Get local node's view of the status of the specified Node.
+    RV = case dict:find(node(), Nodes) of
              {ok, Status} ->
-                 Status;
+                 lists:keyfind(Node, 1, Status);
              _ ->
                  []
          end,
     {reply, RV, State};
 
 handle_call(get_nodes, _From, #state{nodes=Nodes} = State) ->
+    NodeStatus = case dict:find(node(), Nodes) of
+                    {ok, Status} ->
+                        Status;
+                    _ ->
+                        []
+                end,
+    {reply, NodeStatus, State};
+
+handle_call(get_cluster_status, _From, #state{nodes=Nodes} = State) ->
     {reply, dict:to_list(Nodes), State}.
 
-handle_cast({heartbeat, Node, Status},
-            #state{nodes_wanted = NodesWanted} = State) ->
-    NewStatus = process_heartbeat(Node, Status, NodesWanted),
-    NewNodes = dict:from_list(NewStatus),
+handle_cast({heartbeat, Node, Status}, #state{nodes = Nodes} = State) ->
+    ns_server_monitor:update_node_status(Node),
+    NewNodes = dict:store(Node, Status, Nodes),
     {noreply, State#state{nodes=NewNodes}};
 handle_cast(Msg, State) ->
     ?log_debug("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info(send_heartbeat, #state{nodes_wanted = NodesWanted} = State) ->
-    Status = update_status(State, NodesWanted),
+handle_info(send_heartbeat,
+            #state{nodes = Nodes, nodes_wanted = NodesWanted} = State) ->
+    Status = update_status(NodesWanted),
     send_heartbeat(Status, NodesWanted),
-    NewStatus = dict:from_list(Status),
-    {noreply, State#state{nodes=NewStatus}};
+    NewNodes = dict:store(node(), Status, Nodes),
+    {noreply, State#state{nodes=NewNodes}};
 
 handle_info({nodes_wanted, NewNodes0}, #state{nodes=Statuses} = State) ->
     {NewNodes, NewStatuses} = health_monitor:process_nodes_wanted(NewNodes0,
@@ -112,7 +129,7 @@ get_nodes() ->
     catch
         E:R ->
             ?log_debug("Error attempting to get nodes: ~p", [{E, R}]),
-            dict:new()
+            []
     end.
 
 get_node(Node) ->
@@ -132,123 +149,56 @@ get_node_status(Node) ->
             ?log_debug("Error attempting to get node ~p: ~p", [Node, {E, R}]),
             []
     end.
+
+get_cluster_status() ->
+    try gen_server:call(?MODULE, get_cluster_status) of
+        Status -> Status
+    catch
+        E:R ->
+            ?log_debug("Error attempting to get cluster view ~p", [{E, R}]),
+            []
+    end.
 %% Internal functions
 
-update_status(#state{nodes=NodesDict}, NodesWanted) ->
-    update_node_status(dict:to_list(NodesDict), NodesWanted).
-
-update_node_status(NodesList, NodesWanted) ->
+update_status(NodesWanted) ->
     lists:foldl(
         fun (Node, Acc) ->
-                GlobalStatus = case lists:keyfind(Node, 1, NodesList) of
-                                false ->
-                                    [];
-                                {Node, Status} ->
-                                    Status
-                                end,
-                NewStatus =  get_all_status([kv, ns_server],
-                                            Node, GlobalStatus, []),
+                NewStatus = get_all_status(all_monitors(), Node, []),
                 [{Node, NewStatus} | Acc]
         end, [], NodesWanted).
 
-get_all_status([], _, _, Acc) ->
+get_all_status([], _, Acc) ->
     Acc;
-get_all_status([kv | Rest], Node, GlobalStatus, Acc) ->
-    KVStatus = {kv, get_bucket_status(Node, GlobalStatus)},
-    get_all_status(Rest, Node, GlobalStatus, [KVStatus | Acc]);
-get_all_status([ns_server | Rest], Node, GlobalStatus, Acc) ->
-    NSStatus = {ns_server, get_ns_server_status(Node, GlobalStatus)},
-    get_all_status(Rest, Node, GlobalStatus, [NSStatus | Acc]).
+get_all_status([kv | Rest], Node, Acc) ->
+    KVStatus = {kv, get_bucket_status(Node)},
+    get_all_status(Rest, Node, [KVStatus | Acc]);
+get_all_status([ns_server | Rest], Node, Acc) ->
+    NSStatus = {ns_server, get_ns_server_status(Node)},
+    get_all_status(Rest, Node, [NSStatus | Acc]).
 
-get_bucket_status(Node, GlobalStatus) ->
-    GlobalBuckets = proplists:get_value(kv, GlobalStatus, unknown),
+get_bucket_status(Node) ->
     case kv_monitor:get_node(Node) of
         [] ->
             %% Local node is not monitoring KV status for this Node.
-            GlobalBuckets;
-        LocalKV ->
-            LocalBuckets = proplists:get_value(buckets, LocalKV, unknown),
-            case GlobalBuckets of
-                unknown ->
-                    LocalBuckets;
-                _ ->
-                    get_latest_bucket_status(LocalBuckets, GlobalBuckets)
-            end
+            [];
+        [_, {buckets, BucketList}] ->
+            lists:foldl(
+                fun ({Bucket, State, LastHeard}, Acc) ->
+                   [{Bucket, State, update_ts(LastHeard)} | Acc]
+                end, [], BucketList)
     end.
 
-%% For a node, say Node A, some remote node might have more uptodate view
-%% of the state of buckets on Node A than we do.
-%% Compare the global view with the local one and return the most current
-%% info.
-get_latest_bucket_status(LocalBuckets, GlobalBuckets) ->
-    {LB, GB} = lists:foldl(
-           fun ({Bucket, _, LastHeard} = LocalBucket, {AccL, AccG}) ->
-                   case lists:keyfind(Bucket, 1, GlobalBuckets) of
-                       false ->
-                          {[LocalBucket | AccL], AccG};
-                       {_, _, GlobalLastHeard} = GlobalBucket ->
-                               RB = if LastHeard >= GlobalLastHeard -> LocalBucket;
-                                  LastHeard < GlobalLastHeard -> GlobalBucket
-                               end,
-                                {[RB | AccL], lists:keydelete(Bucket, 1, AccG)}
-                   end
-           end, {[], GlobalBuckets}, LocalBuckets),
-    LB ++ GB.
-
-get_ns_server_status(Node, GlobalStatus) ->
-    LocalState = ns_server_monitor:get_node(Node),
-    case GlobalStatus of
-        [] ->
-            LocalState;
-        _ ->
-            case proplists:get_value(ns_server, GlobalStatus, unknown) of
-                unknown ->
-                    LocalState;
-                [] ->
-                    LocalState;
-                {_, GlobalLastHeard} = GlobalState ->
-                    case LocalState of
-                        unknown ->
-                            GlobalState;
-                        {_, LastHeard} ->
-                            if LastHeard >= GlobalLastHeard -> LocalState;
-                               LastHeard < GlobalLastHeard -> GlobalState
-                            end
-                    end
-            end
-    end.
-
-process_status([], _, Acc) ->
-    Acc;
-process_status([kv | Rest], Status, Acc) ->
-    case proplists:get_value(kv, Status, unknown) of
+get_ns_server_status(Node) ->
+    case ns_server_monitor:get_node(Node) of
         unknown ->
-            process_status(Rest, Status, [{kv, unknown} | Acc]);
-        Buckets ->
-            %% Time across the nodes may not be in sync.
-            %% So, we send the time diff over the wire.
-            NewStatus = lists:map(
-                            fun ({Bucket, State, LastHeard}) ->
-                                    {Bucket, State,
-                                     timer:now_diff(erlang:now(), LastHeard)}
-                            end, Buckets),
-            process_status(Rest, Status, [{kv, NewStatus} | Acc])
-    end;
-process_status([ns_server | Rest], Status, Acc) ->
-    case proplists:get_value(ns_server, Status, unknown) of
-        unknown ->
-            process_status(Rest, Status, [{ns_server, unknown} | Acc]);
+            [];
         {State, LastHeard} ->
-            NewStatus = {State, timer:now_diff(erlang:now(), LastHeard)},
-            process_status(Rest, Status, [{ns_server, NewStatus} | Acc])
+            {State, update_ts(LastHeard)}
     end.
 
-process_all_status(Status) ->
-    lists:foldl(
-        fun ({Node, NodeStatus}, Acc) ->
-            NS1 = process_status([kv, ns_server], NodeStatus, []),
-            [{Node, NS1} | Acc]
-        end, [], Status).
+%% Replace last heard time stamp with time difference
+update_ts(LastHeard) ->
+    timer:now_diff(erlang:now(), LastHeard).
 
 skip_heartbeats_to() ->
     case testpoint:get(skip_heartbeat_to) of
@@ -258,9 +208,6 @@ skip_heartbeats_to() ->
             SkipList
     end.
 send_heartbeat(Status, NodesWanted) ->
-    %% TODO: Call process_all_status to adjust for time difference among nodes.
-    %% Currently assuming that clock on all nodes is in sync.
-    %% Status1 = process_all_status(Status),
     SkipList = skip_heartbeats_to(),
     SendList = NodesWanted -- SkipList,
     catch misc:parallel_map(
@@ -268,13 +215,11 @@ send_heartbeat(Status, NodesWanted) ->
             gen_server:cast({?MODULE, N}, {heartbeat, node(), Status})
        end, SendList, ?HEARTBEAT_PERIOD - 10).
 
-process_heartbeat(Node, Status, NodesWanted) ->
-    ns_server_monitor:update_node_status(Node),
-    update_node_status(Status, NodesWanted).
-
 get_ns_server_state(Status) ->
     case proplists:get_value(ns_server, Status, unknown) of
         unknown ->
+            inactive;
+        [] ->
             inactive;
         {State, _} ->
             State
@@ -283,6 +228,8 @@ get_ns_server_state(Status) ->
 get_kv_state(Node, Status) ->
     case proplists:get_value(kv, Status, unknown) of
         unknown ->
+            inactive;
+        [] ->
             inactive;
         BucketList ->
             NodeBuckets = ns_bucket:node_bucket_names(Node),
@@ -328,3 +275,7 @@ get_node_state(inactive, warmup) ->
     <<"unhealthy">>;
 get_node_state(inactive, _) ->
     <<"needs_attention">>.
+
+
+all_monitors() ->
+    [kv, ns_server].

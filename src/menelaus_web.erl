@@ -28,7 +28,6 @@
 -include("ns_common.hrl").
 -include("ns_heart.hrl").
 -include("ns_stats.hrl").
--include("couch_db.hrl").
 -include("rbac.hrl").
 
 -ifdef(EUNIT).
@@ -222,6 +221,8 @@ get_action(Req, {AppRoot, IsSSL, Plugins}, Path, PathTokens) ->
                     {done, redirect_permanently("/ui/index.html", Req)};
                 ["versions"] ->
                     {done, handle_versions(Req)};
+                ["whoami"] ->
+                    {no_check, fun menelaus_web_rbac:handle_whoami/1};
                 ["pools"] ->
                     {{[pools], read}, fun handle_pools/1};
                 ["pools", "default"] ->
@@ -665,7 +666,8 @@ get_action(Req, {AppRoot, IsSSL, Plugins}, Path, PathTokens) ->
                 ["_goxdcr", "regexpValidation"] ->
                     goxdcr_rest:spec(
                       no_check,
-                      fun menelaus_util:reply_not_found/1);
+                      fun menelaus_util:reply_not_found/1, [],
+                      menelaus_util:concat_url_path(["controller", "regexpValidation"]));
                 ["_goxdcr", "controller", "bucketSettings", _Bucket] ->
                     XdcrPath = drop_prefix(Req:get(raw_path)),
                     {{[admin, internal], all},
@@ -802,8 +804,17 @@ serve_ui(Req, false, F, Args) ->
 serve_ui(Req, true, F, Args) ->
     apply(F, Args ++ [Req]).
 
+use_minified(Req) ->
+    Query = Req:parse_qs(),
+    %% explicity specified minified in the query params
+    %% overrides the application env value
+    Minified = proplists:get_value("minified", Query),
+    Minified =:= "true" orelse
+        Minified =:= undefined andalso
+        misc:get_env_default(use_minified, true).
+
 handle_ui_root(AppRoot, Path, Plugins, Req) ->
-    Filename = case misc:get_env_default(use_minified, true) of
+    Filename = case use_minified(Req) of
                    true ->
                        filename:join([AppRoot, "ui", "index.min.html"]);
                    _ ->
@@ -2648,7 +2659,7 @@ reset_admin_password(generated) ->
     Password = gen_password(8),
     case reset_admin_password(Password) of
         {ok, Message} ->
-            {ok, ?l2b(io_lib:format("~s New password is ~s", [?b2l(Message), Password]))};
+            {ok, list_to_binary(io_lib:format("~s New password is ~s", [binary_to_list(Message), Password]))};
         Err ->
             Err
     end;
@@ -2673,7 +2684,7 @@ reset_admin_password(Password) ->
         _ ->
             ok = ns_config_auth:set_credentials(admin, User, Password),
             ns_audit:password_change(undefined, {User, admin}),
-            {ok, ?l2b(io_lib:format("Password for user ~s was successfully replaced.", [User]))}
+            {ok, list_to_binary(io_lib:format("Password for user ~s was successfully replaced.", [User]))}
     end.
 
 -ifdef(EUNIT).
@@ -3597,8 +3608,7 @@ parse_and_validate_extra_index_settings(Params) ->
     RV0 = CModeValidator({"indexCompactionMode", index_compaction_mode,
                           "index compaction mode"}),
 
-    DaysList = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
-                "Friday", "Saturday"],
+    DaysList = misc:get_days_list(),
     DaysValidator = mk_string_field_validator(DaysList, Params),
     RV1 = DaysValidator({"indexCircularCompaction[daysOfWeek]",
                          index_circular_compaction_days,

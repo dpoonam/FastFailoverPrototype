@@ -41,7 +41,7 @@ init([]) ->
     erlang:process_flag(priority, high),
     timer2:send_interval(?CHECK_STATUS_PERIOD, check_status),
     self() ! check_status,
-    ns_pubsub:subscribe_link(ns_config_events, fun handle_config_event/2),
+    ns_pubsub:subscribe_link(ns_config_events, fun handle_config_event/2, empty),
     {ok, #state{nodes=dict:new(),
                 nodes_wanted=ns_node_disco:nodes_wanted()}}.
 

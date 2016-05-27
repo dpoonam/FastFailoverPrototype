@@ -153,7 +153,12 @@ get_local_node_status() ->
                                 true ->
                                     ready;
                                 false ->
-                                    not_ready
+                                    case ns_memcached:connected(node(), Bucket) of
+                                        true ->
+                                            warmed_but_not_ready;
+                                        false ->
+                                            not_ready
+                                    end
                             end,
                     [{Bucket, BState, erlang:now()} | Acc]
                 end, [], ActiveBuckets),
