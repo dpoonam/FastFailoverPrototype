@@ -117,7 +117,7 @@ get_status(Node) ->
         [_, {buckets, BucketList}] ->
             lists:foldl(
                 fun ({Bucket, State, LastHeard}, Acc) ->
-                   [{Bucket, State, health_monitor:update_ts(LastHeard)} | Acc]
+                   [{Bucket, State, LastHeard} | Acc]
                 end, [], BucketList)
     end.
 

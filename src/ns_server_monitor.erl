@@ -26,7 +26,7 @@
          code_change/3]).
 %% API
 -export([get_nodes/0, get_node/1, update_node_status/1,
-         get_status/1]).
+         get_status/1, analyze_status/2]).
 
 -record(state, {
           nodes :: dict(),
@@ -142,5 +142,48 @@ get_status(Node) ->
         unknown ->
             [];
         {State, LastHeard} ->
-            {State, health_monitor:update_ts(LastHeard)}
+            {State, LastHeard}
+    end.
+
+get_node_state(Status) ->
+    case proplists:get_value(ns_server, Status, unknown) of
+        unknown ->
+            inactive;
+        [] ->
+            inactive;
+        {State, _} ->
+            State
+    end.
+%% A node, say NodeA, is considered healthy if ns_server on all nodes say 
+%% NodeA is active.
+%% NodeA is unhealthy if all nodes say it is inactive.
+%% If only a subset of nodes say NodeA is active then it is pontentially
+%% a network partition or flaky communication.
+analyze_status(Node, Latest) ->
+    [HealthyM, UnhealthyM] = lists:foldl(
+                fun ({_OtherNode, inactive, _}, [Healthy, Unhealthy]) ->
+                        %% Consider view of only those nodes which are active.
+                        [Healthy, Unhealthy];
+                    ({OtherNode, _, AllStatus}, [Healthy, Unhealthy]) ->
+                        NodeStatus = proplists:get_value(Node, AllStatus, []),
+                        State = get_node_state(NodeStatus), 
+                        case State of
+                            active ->
+                                [[OtherNode | Healthy], Unhealthy];
+                            _ ->
+                                [Healthy, [OtherNode | Unhealthy]]
+                        end
+                end, [[], []], Latest),
+   case UnhealthyM of
+        [] ->
+            %% All nodes say the node is healthy
+            healthy;
+        _ ->
+            case HealthyM of
+                [] ->
+                    %% All nodes say the node is unhealthy
+                    unhealthy;
+                _ ->
+                    {potential_network_partition, lists:sort(UnhealthyM)}
+            end
     end.
