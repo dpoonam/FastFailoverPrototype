@@ -44,7 +44,7 @@
                }).
 
 -define(HIBERNATE_TIMEOUT, 10000).
--define(LIVENESS_UPDATE_INTERVAL, 1000000).
+-define(LIVENESS_UPDATE_INTERVAL, 500000).
 
 init([Type, ConnName, Node, Bucket, ExtModule, InitArgs]) ->
     {ExtState, State} = ExtModule:init(

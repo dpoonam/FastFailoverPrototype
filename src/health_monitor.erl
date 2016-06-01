@@ -15,7 +15,7 @@
 %%
 -module(health_monitor).
 
--define(INACTIVE_TIME, 2000000). % 2 seconds in microseconds
+-define(INACTIVE_TIME, 5000000). % 5 seconds in microseconds
 
 -compile(export_all).
 -include("ns_common.hrl").

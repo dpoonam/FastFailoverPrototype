@@ -25,7 +25,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 %% API
--export([get_nodes/0, get_node/1, get_status/1]).
+-export([get_nodes/0, get_node/1, get_status/1, analyze_status/2]).
 
 -record(state, {
           nodes :: dict()
@@ -121,8 +121,73 @@ get_status(Node) ->
                 end, [], BucketList)
     end.
 
-%% Internal functions
+%% A node is considered healthy if atleast one node reports that
+%% all buckets on the node are active or warmed (ready).
+get_node_state(Node, Status) ->
+    case proplists:get_value(kv, Status, unknown) of
+        unknown ->
+            inactive;
+        [] ->
+            inactive;
+        BucketList ->
+            NodeBuckets = ns_bucket:node_bucket_names(Node),
+            ReadyBuckets = lists:filtermap(
+                                fun ({Bucket, State, _}) ->
+                                   case State of
+                                        active ->
+                                            {true, Bucket};
+                                        ready ->
+                                            {true, Bucket};
+                                        _ ->
+                                            false
+                                    end
+                                end, BucketList),
+            NotReadyBucktes = ordsets:subtract(lists:sort(NodeBuckets),
+                                               lists:sort(ReadyBuckets)),
+            case NotReadyBucktes of
+                [] ->
+                    active;
+                _ ->
+                    case ReadyBuckets of
+                        [] ->
+                            inactive;
+                        _ ->
+                            {partially_active, NotReadyBucktes}
+                    end
+            end
+    end.
+analyze_status(Node, Latest) ->
+    [ActiveRV, InactiveRV, PartialRV] = lists:foldl(
+                fun ({_OtherNode, inactive, _}, [Active, Inactive, Partial]) ->
+                        %% Consider view of only those nodes which are active.
+                        [Active, Inactive, Partial];
+                    ({OtherNode, _, AllStatus}, [Active, Inactive, Partial]) ->
+                        Status = proplists:get_value(Node, AllStatus, []),
+                        State = get_node_state(Node, Status),
+                        case State of
+                            active ->
+                                [[Node | Active], Inactive, Partial];
+                            inactive ->
+                                [Active, [Node | Inactive], Partial];
+                            Other ->
+                                [Active, Inactive, [{Node, Other} | Partial]]
+                        end
+                end, [[], [], []], Latest),
+    case ActiveRV of
+        [] ->
+            case PartialRV of
+                [] ->
+                    unhealthy;
+                _ ->
+                    PartialRV
+            end;
+        _ ->
+            %% Atleast one node has reported that all buckets on the node are
+            %% active.
+            healthy
+    end.
 
+%% Internal functions
 check_local_node_status(Nodes) ->
     case lists:keyfind(node(), 1, Nodes) of
         false ->
@@ -175,4 +240,6 @@ get_local_node_status() ->
                     [{Bucket, BState, erlang:now()} | Acc]
                 end, [], ActiveBuckets),
    {node(), [{node_state, NodeState}, {buckets, BAcc}]}.
+
+
 

@@ -127,7 +127,6 @@ update_node_status(Node, OldStatus, Latest) ->
         [] ->
             {NewState, erlang:now()};
         {OldState, OldTS} ->
-            ?log_debug("OldStatus:~p NewState:~p ~n", [OldStatus, NewState]),
             case NewState of
                 OldState ->
                     OldStatus;
@@ -136,7 +135,7 @@ update_node_status(Node, OldStatus, Latest) ->
             end
     end.
 analyze_status(Node, Latest) ->
-    AllMonitors = all_monitors() -- [kv],
+    AllMonitors = all_monitors(),
     AllMonitorStatus = lists:foldl(
                     fun (Monitor, MAcc) ->
                         Module = monitor_module(Monitor),
