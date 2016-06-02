@@ -144,6 +144,8 @@ get_node_state(Node, Status) ->
                                 end, BucketList),
             NotReadyBucktes = ordsets:subtract(lists:sort(NodeBuckets),
                                                lists:sort(ReadyBuckets)),
+            ?log_debug("Node:~p, NodeBuckets:~p ReadyBuckets:~p ~n",
+                       [Node, NodeBuckets, ReadyBuckets]),
             case NotReadyBucktes of
                 [] ->
                     active;
@@ -152,7 +154,7 @@ get_node_state(Node, Status) ->
                         [] ->
                             inactive;
                         _ ->
-                            {partially_active, NotReadyBucktes}
+                            {not_ready_buckets, NotReadyBucktes}
                     end
             end
     end.
@@ -164,6 +166,8 @@ analyze_status(Node, Latest) ->
                     ({OtherNode, _, AllStatus}, [Active, Inactive, Partial]) ->
                         Status = proplists:get_value(Node, AllStatus, []),
                         State = get_node_state(Node, Status),
+                        ?log_debug("Partial:~p ~n", [Partial]),
+                        ?log_debug("OtherNode:~p Node:~p Status:~p ~n State:~p ~n", [OtherNode, Node, Status, State]),
                         case State of
                             active ->
                                 [[Node | Active], Inactive, Partial];
@@ -195,27 +199,52 @@ check_local_node_status(Nodes) ->
             %% Get status using old method i.e. from ns_memcached
             add_local_node_status(Nodes);
         {_, NodeInfo} ->
-            %% Local node will be reported as inactive when there is
-            %% no dcp traffic for any of the buckets.
-            %% But, the node could still be healthy.
-            %% Get status using old method i.e. from ns_memcached
-            NodeState = proplists:get_value(node_state, NodeInfo),
-            case NodeState of
-                inactive ->
-                    update_local_node_status(Nodes);
+            %% Get status using old method i.e. from ns_memcached for
+            %% buckets that do not show DCP traffic activity.
+            Buckets = proplists:get_value(buckets, NodeInfo),
+            ActiveBuckets = lists:filtermap(
+                                    fun ({Bucket, State, _}) ->
+                                        case State of
+                                            active ->
+                                                {true, Bucket};
+                                            _ ->
+                                                false
+                                        end
+                                    end, Buckets),
+            ?log_debug("ActiveBuckets:~p ~n", [ActiveBuckets]),
+            case ns_memcached:active_buckets() -- ActiveBuckets of
+                [] ->
+                    Nodes;
                 _ ->
-                    Nodes
+                    update_local_node_status(Nodes, ActiveBuckets)
             end
     end.
 
 add_local_node_status(Nodes) ->
-    [get_local_node_status() | Nodes].
+    [get_local_node_status([]) | Nodes].
 
-update_local_node_status(Nodes) ->
-    lists:keyreplace(node(), 1, Nodes, get_local_node_status()).
+update_local_node_status(Nodes, ActiveBuckets) ->
+    lists:keyreplace(node(), 1, Nodes, get_local_node_status(ActiveBuckets)).
 
-get_local_node_status() ->
-    ActiveBuckets = ns_memcached:active_buckets(),
+get_bucket_state(Bucket, ReadyBuckets, ActiveBuckets) ->
+    case lists:member(Bucket, ActiveBuckets) of
+        true ->
+            active;
+        false ->
+            case lists:member(Bucket, ReadyBuckets) of
+                true ->
+                    ready;
+                false ->
+                    case ns_memcached:connected(node(), Bucket) of
+                        true ->
+                            warmed_but_not_ready;
+                        false ->
+                            not_ready
+                    end
+            end
+    end.
+get_local_node_status(ActiveBuckets) ->
+    AllBuckets = ns_memcached:active_buckets(),
     ReadyBuckets = ns_memcached:warmed_buckets(),
     %% Node is considered active if atleast one bucket is ready.
     NodeState = case ReadyBuckets of
@@ -226,19 +255,10 @@ get_local_node_status() ->
                 end,
     BAcc = lists:foldl(
                 fun (Bucket, Acc) ->
-                    BState = case lists:member(Bucket, ReadyBuckets) of
-                                true ->
-                                    ready;
-                                false ->
-                                    case ns_memcached:connected(node(), Bucket) of
-                                        true ->
-                                            warmed_but_not_ready;
-                                        false ->
-                                            not_ready
-                                    end
-                            end,
+                    BState = get_bucket_state(Bucket,
+                                              ReadyBuckets, ActiveBuckets),
                     [{Bucket, BState, erlang:now()} | Acc]
-                end, [], ActiveBuckets),
+                end, [], AllBuckets),
    {node(), [{node_state, NodeState}, {buckets, BAcc}]}.
 
 

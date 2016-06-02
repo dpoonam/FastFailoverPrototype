@@ -719,9 +719,10 @@ handle_cast(start_completed, #state{start_time=Start,
 handle_info(check_started, #state{status=Status} = State)
   when Status =:= connected orelse Status =:= warmed ->
     {noreply, State};
-handle_info(check_started, #state{timer=Timer, sock=Sock} = State) ->
+handle_info(check_started,
+            #state{timer=Timer, bucket=Bucket, sock=Sock} = State) ->
     Stats = retrieve_warmup_stats(Sock),
-    case has_started(Stats) of
+    case has_started(Stats, Bucket) of
         true ->
             {ok, cancel} = timer2:cancel(Timer),
             misc:flush(check_started),
@@ -737,6 +738,7 @@ handle_info(check_started, #state{timer=Timer, sock=Sock} = State) ->
                       %% handle_info for EXIT message below)
                       erlang:unlink(Pid)
               end),
+            ?log_debug("Bucket Warmed up in EP engine~n"),
             {noreply, State};
         false ->
             {ok, S} = Stats,
@@ -1416,28 +1418,30 @@ server(Bucket) ->
 retrieve_warmup_stats(Sock) ->
     mc_client_binary:stats(Sock, <<"warmup">>, fun (K, V, Acc) -> [{K, V}|Acc] end, []).
 
-simulate_slow_warmup(TestPoint) ->
+simulate_slow_warmup(TestPoint, Bucket) ->
     case testpoint:get(TestPoint) of
         false ->
            false;
-        0 ->
+        {Bucket, 0} ->
            false;
-        Delay ->
+        {Bucket, Delay} ->
             NewDelay = case Delay =< ?CHECK_WARMUP_INTERVAL of
                             true ->
                                 0;
                             _ ->
                                 Delay - ?CHECK_WARMUP_INTERVAL
                        end,
-            ?log_debug("Simulating slow bucket warmup in EP engine. Pending delay ~p seconds ~n", [Delay/1000]),
-            testpoint:set(TestPoint, NewDelay),
-            true
+            ?log_debug("Simulating slow bucket warmup for bucket ~p. Pending delay ~p seconds ~n", [Bucket, Delay/1000]),
+            testpoint:set(TestPoint, {Bucket, NewDelay}),
+            true;
+        _ ->
+            false
     end.
-has_started({memcached_error, key_enoent, _}) ->
+has_started({memcached_error, key_enoent, _}, _) ->
     %% this is memcached bucket, warmup is done :)
     true;
-has_started(Stats) ->
-    case simulate_slow_warmup(ep_slow_bucket_warmup) of
+has_started(Stats, Bucket) ->
+    case simulate_slow_warmup(ep_slow_bucket_warmup, Bucket) of
         false ->
             has_started_inner(Stats);
         true ->

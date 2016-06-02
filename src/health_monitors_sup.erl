@@ -31,9 +31,7 @@ init([]) ->
           child_specs()}}.
 
 child_specs() ->
-     [{testpoints_store, {simple_store, start_link, [testpoints]},
-      permanent, 1000, worker, []},
-      {dcp_traffic_spy, {dcp_traffic_spy, start_link, []},
+     [{dcp_traffic_spy, {dcp_traffic_spy, start_link, []},
       permanent, 1000, worker, [dcp_traffic_spy]},
      {kv_monitor, {kv_monitor, start_link, []},
       permanent, 1000, worker, [kv_monitor]},

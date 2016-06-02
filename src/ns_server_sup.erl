@@ -200,6 +200,9 @@ child_specs() ->
      {xdcr_dcp_sockets_pool, {xdcr_dcp_sockets_pool, start_link, []},
       permanent, 1000, worker, []},
 
+     {testpoints_store, {simple_store, start_link, [testpoints]},
+      permanent, 1000, worker, []},
+
      {ns_bucket_worker_sup, {ns_bucket_worker_sup, start_link, []},
       permanent, infinity, supervisor, [ns_bucket_worker_sup]},
 
