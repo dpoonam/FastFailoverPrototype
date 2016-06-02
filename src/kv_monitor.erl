@@ -123,7 +123,7 @@ get_status(Node) ->
 
 %% A node is considered healthy if atleast one node reports that
 %% all buckets on the node are active or warmed (ready).
-get_node_state(Node, Status) ->
+get_node_state(OtherNode, Node, Status) ->
     case proplists:get_value(kv, Status, unknown) of
         unknown ->
             inactive;
@@ -131,7 +131,7 @@ get_node_state(Node, Status) ->
             inactive;
         BucketList ->
             NodeBuckets = ns_bucket:node_bucket_names(Node),
-            ReadyBuckets = lists:filtermap(
+            ActiveReadyBuckets = lists:filtermap(
                                 fun ({Bucket, State, _}) ->
                                    case State of
                                         active ->
@@ -142,19 +142,29 @@ get_node_state(Node, Status) ->
                                             false
                                     end
                                 end, BucketList),
-            NotReadyBucktes = ordsets:subtract(lists:sort(NodeBuckets),
-                                               lists:sort(ReadyBuckets)),
-            ?log_debug("Node:~p, NodeBuckets:~p ReadyBuckets:~p ~n",
-                       [Node, NodeBuckets, ReadyBuckets]),
-            case NotReadyBucktes of
+            InactiveBucktes = ordsets:subtract(lists:sort(NodeBuckets),
+                                               lists:sort(ActiveReadyBuckets)),
+            case InactiveBucktes of
                 [] ->
                     active;
                 _ ->
-                    case ReadyBuckets of
+                    case ActiveReadyBuckets of
                         [] ->
                             inactive;
                         _ ->
-                            {not_ready_buckets, NotReadyBucktes}
+                            %% There are some active/ready and some
+                            %% non-ready buckets.
+                            case Node of
+                                OtherNode ->
+                                    %% This is the list of buckets that are
+                                    %% not ready/warmed on the Node.
+                                    {not_ready_buckets, InactiveBucktes};
+                                _ ->
+                                    %% Node is considered active from
+                                    %% OtherNode's perspective as long
+                                    %% atleast one bucket is active.
+                                    active
+                            end
                     end
             end
     end.
@@ -165,9 +175,7 @@ analyze_status(Node, Latest) ->
                         [Active, Inactive, Partial];
                     ({OtherNode, _, AllStatus}, [Active, Inactive, Partial]) ->
                         Status = proplists:get_value(Node, AllStatus, []),
-                        State = get_node_state(Node, Status),
-                        ?log_debug("Partial:~p ~n", [Partial]),
-                        ?log_debug("OtherNode:~p Node:~p Status:~p ~n State:~p ~n", [OtherNode, Node, Status, State]),
+                        State = get_node_state(OtherNode, Node, Status),
                         case State of
                             active ->
                                 [[Node | Active], Inactive, Partial];
@@ -177,18 +185,18 @@ analyze_status(Node, Latest) ->
                                 [Active, Inactive, [{Node, Other} | Partial]]
                         end
                 end, [[], [], []], Latest),
-    case ActiveRV of
+    case PartialRV of
         [] ->
-            case PartialRV of
+            case ActiveRV of
                 [] ->
                     unhealthy;
                 _ ->
-                    PartialRV
+                    %% Atleast one node thinks the node is active.
+                    healthy
             end;
         _ ->
-            %% Atleast one node has reported that all buckets on the node are
-            %% active.
-            healthy
+            %% There are some buckets that are not warmed up/ready.
+            PartialRV
     end.
 
 %% Internal functions
@@ -211,7 +219,6 @@ check_local_node_status(Nodes) ->
                                                 false
                                         end
                                     end, Buckets),
-            ?log_debug("ActiveBuckets:~p ~n", [ActiveBuckets]),
             case ns_memcached:active_buckets() -- ActiveBuckets of
                 [] ->
                     Nodes;

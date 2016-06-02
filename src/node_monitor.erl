@@ -105,12 +105,9 @@ handle_cast(Msg, State) ->
     ?log_debug("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info(send_heartbeat,
-            #state{nodes = Nodes, nodes_wanted = NodesWanted} = State) ->
-    Status = update_status(NodesWanted),
-    send_heartbeat(Status, NodesWanted),
-    NewNodes = dict:store(node(), Status, Nodes),
-    {noreply, State#state{nodes=NewNodes}};
+handle_info(send_heartbeat, #state{nodes_wanted = NodesWanted} = State) ->
+    send_heartbeat(NodesWanted),
+    {noreply, State};
 
 handle_info({nodes_wanted, NewNodes0}, #state{nodes=Statuses} = State) ->
     {NewNodes, NewStatuses} = health_monitor:process_nodes_wanted(NewNodes0,
@@ -188,12 +185,12 @@ skip_heartbeats_to() ->
         false ->
             [];
         SkipList ->
+            ?log_debug("Skip heartbeats to ~p ~n", [SkipList]),
             SkipList
     end.
-send_heartbeat(Status, NodesWanted) ->
-    SkipList = skip_heartbeats_to(),
-    SendList = NodesWanted -- SkipList,
-    SendStatus = {Status, {send_ts, erlang:now()}},
+send_heartbeat(NodesWanted) ->
+    SendStatus = {update_status(NodesWanted), {send_ts, erlang:now()}},
+    SendList = NodesWanted -- skip_heartbeats_to(),
     catch misc:parallel_map(
        fun (N) ->
             gen_server:cast({?MODULE, N}, {heartbeat, node(), SendStatus})
