@@ -363,7 +363,8 @@ default() ->
                  auto_failover_other_nodes_down,
                  auto_failover_cluster_too_small, auto_failover_disabled,
                  ip, disk, overhead, ep_oom_errors, ep_item_commit_failed,
-                 audit_dropped_events, indexer_ram_max_usage]}
+                 audit_dropped_events, indexer_ram_max_usage,
+                 cluster_manager_down, network_issues]}
       ]},
      {alert_limits, [
        %% Maximum percentage of overhead compared to max bucket size (%)

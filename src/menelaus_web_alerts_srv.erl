@@ -55,6 +55,10 @@ short_description(audit_dropped_events) ->
     "audit write failure";
 short_description(indexer_ram_max_usage) ->
     "indexer ram approaching threshold warning";
+short_description(cluster_manager_down) ->
+    "cluster manager probably down warning";
+short_description(network_issues) ->
+    "network issues warning";
 short_description(Other) ->
     %% this case is needed for tests to work
     couch_util:to_list(Other).
@@ -73,8 +77,11 @@ errors(disk) ->
 errors(audit_dropped_events) ->
     "Audit Write Failure. Attempt to write to audit log on node \"~s\" was unsuccessful";
 errors(indexer_ram_max_usage) ->
-    "Warning: approaching max index RAM. Indexer RAM on node \"~s\" is ~p%, which is at or above the threshold of ~p%.".
-
+    "Warning: approaching max index RAM. Indexer RAM on node \"~s\" is ~p%, which is at or above the threshold of ~p%.";
+errors(cluster_manager_down) ->
+    "Warning: Cluster manager is probably down on node \"~s\".";
+errors(network_issues) ->
+    "Warning: Node \"~s\" is having issues communicating with following nodes \"~s\".".
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
@@ -231,7 +238,7 @@ start_timer() ->
 %% broadcast alerts to clients connected to any particular node
 global_checks() ->
     [oom, ip, write_fail, overhead, disk, audit_write_fail,
-     indexer_ram_max_usage].
+     indexer_ram_max_usage, cluster_manager_down, network_issues].
 
 %% @doc fires off various checks
 check_alerts(Opaque, Hist, Stats) ->
@@ -331,6 +338,42 @@ check(indexer_ram_max_usage, Opaque, _History, Stats) ->
     end,
     Opaque;
 
+%% @doc check for cluster manager issues
+check(cluster_manager_down, Opaque, _History, _Stats) ->
+    lists:foreach(
+        fun ({Node, Status}) ->
+            case Status of
+                {{needs_attention, [ns_server]}, _} ->
+                    {_Sname, Host} = misc:node_name_host(Node),
+                    Err = fmt_to_bin(errors(cluster_manager_down), [Host]),
+                    global_alert(cluster_manager_down, Err);
+                _ ->
+                    ok
+            end
+        end, node_status_analyzer:get_nodes()),
+    Opaque;
+
+%% @doc check for network issues
+check(network_issues, Opaque, _History, _Stats) ->
+    lists:foreach(
+        fun ({Node, Status}) ->
+            case Status of
+                {{needs_attention, [{_,{potential_network_partition, NodeList}}]}, _} ->
+                    {_Sname, Host} = misc:node_name_host(Node),
+                    OtherHostList = lists:map(
+                                        fun (N) ->
+                                            {_S, H} = misc:node_name_host(N),
+                                            H
+                                        end, NodeList),
+                    OtherHosts = string:join(OtherHostList, ", "),
+                    Err = fmt_to_bin(errors(network_issues), [Host, OtherHosts]),
+                    global_alert(network_issues, Err);
+                _ ->
+                    ok
+            end
+        end, node_status_analyzer:get_nodes()),
+    Opaque;
+
 %% @doc check for write failures inside ep engine
 check(write_fail, Opaque, _History, Stats) ->
     check_stat_increased(Stats, ep_item_commit_failed, Opaque);
@@ -342,7 +385,6 @@ check(audit_write_fail, Opaque, _History, Stats) ->
 %% @doc check for any oom errors an any bucket
 check(oom, Opaque, _History, Stats) ->
     check_stat_increased(Stats, ep_oom_errors, Opaque).
-
 
 %% @doc only check for disk usage if there has been no previous
 %% errors or last error was over the timeout ago
@@ -510,7 +552,8 @@ maybe_send_out_email_alert({Key0, Node}, Message) ->
 
 alert_keys() ->
     [ip, disk, overhead, ep_oom_errors, ep_item_commit_failed,
-     audit_dropped_events, indexer_ram_max_usage].
+     audit_dropped_events, indexer_ram_max_usage,
+     cluster_manager_down, network_issues].
 
 %% Cant currently test the alert timeouts as would need to mock
 %% calls to the archiver
