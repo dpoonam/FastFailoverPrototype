@@ -236,7 +236,9 @@ handle_info(tick, State0) ->
     NonPendingNodes = lists:sort(ns_cluster_membership:active_nodes(Config)),
 
     NodeStatuses = ns_doctor:get_nodes(),
-    CurrentlyDown = actual_down_nodes(NodeStatuses, NonPendingNodes, Config),
+    DownNodes = fastfo_down_nodes(NonPendingNodes),
+    ?log_debug("DownNodes:~p ~n", [DownNodes]),
+    CurrentlyDown = [N || {N, _, _} <- DownNodes],
 
     NodeUUIDs =
         ns_config:fold(
@@ -296,9 +298,13 @@ handle_info(tick, State0) ->
               ({failover, {Node, _UUID}}, S) ->
                   case ns_orchestrator:try_autofailover(Node) of
                       ok ->
+                          {Node, Reason, TS} = lists:keyfind(Node, 1, DownNodes),
+                          FailureDetectSec = timer:now_diff(erlang:now(), TS)/1000000,
+                          Msg = lists:flatten(io_lib:format("Node (~p) was automatically failed over because  ~p.", [Node, Reason])),
                           ?user_log(?EVENT_NODE_AUTO_FAILOVERED,
-                                    "Node (~p) was automatically failovered.~n~p",
-                                    [Node, ns_doctor:get_node(Node, NodeStatuses)]),
+                                    "~p Failure detected in ~p seconds. ~n~p",
+                                    [Msg, FailureDetectSec,
+                                     ns_doctor:get_node(Node, NodeStatuses)]),
                           init_reported(S#state{count = S#state.count+1});
                       {autofailover_unsafe, UnsafeBuckets} ->
                           case should_report(#state.reported_autofailover_unsafe, S) of
@@ -384,6 +390,32 @@ actual_down_nodes_inner(NonPendingNodes, BucketConfigs, NodesDict, Now) ->
                       true
               end
       end, NonPendingNodes).
+
+fastfo_down_nodes(NonPendingNodes) ->
+    NodeStatus = node_status_analyzer:get_nodes(),
+    lists:foldl(
+        fun (Node, Acc) ->
+            case lists:keyfind(Node, 1, NodeStatus) of
+                false ->
+                    ?log_debug("Node ~p not found. ~n", [Node]),
+                    Acc;
+                {Node, {unhealthy, TS}} ->
+                    [{Node, "node is unhealthy", TS} | Acc]; 
+                {Node, {{needs_attention, Status}, TS}} ->
+                    case Status of
+                        [kv] ->
+                            [{Node, "potential issue with data service.", TS} | Acc];
+                        [{kv, [{Node, {not_ready_buckets, Buckets}}]}] ->
+                            Reason = "following buckets are not ready: " ++
+                                      string:join(Buckets, ", "),
+                            [{Node, Reason, TS} | Acc];
+                        _ ->
+                            Acc
+                    end;
+                _ ->
+                    Acc
+            end
+        end, [], NonPendingNodes).
 
 %% @doc Save the current state in ns_config
 -spec make_state_persistent(State::#state{}) -> ok.
