@@ -300,9 +300,9 @@ handle_info(tick, State0) ->
                       ok ->
                           {Node, Reason, TS} = lists:keyfind(Node, 1, DownNodes),
                           FailureDetectSec = timer:now_diff(erlang:now(), TS)/1000000,
-                          Msg = lists:flatten(io_lib:format("Node (~p) was automatically failed over because  ~p.", [Node, Reason])),
+                          Msg = lists:flatten(io_lib:format("Node (~p) was automatically failed over because ~s.", [Node, Reason])),
                           ?user_log(?EVENT_NODE_AUTO_FAILOVERED,
-                                    "~p Failure detected in ~p seconds. ~n~p",
+                                    "~p ~n~n Failure detected and failed over in ~p seconds. ~n~n~p",
                                     [Msg, FailureDetectSec,
                                      ns_doctor:get_node(Node, NodeStatuses)]),
                           init_reported(S#state{count = S#state.count+1});
@@ -404,7 +404,7 @@ fastfo_down_nodes(NonPendingNodes) ->
                 {Node, {{needs_attention, Status}, TS}} ->
                     case Status of
                         [kv] ->
-                            [{Node, "potential issue with data service.", TS} | Acc];
+                            [{Node, "potential issue with data service", TS} | Acc];
                         [{kv, [{Node, {not_ready_buckets, Buckets}}]}] ->
                             Reason = "following buckets are not ready: " ++
                                       string:join(Buckets, ", "),
