@@ -37,7 +37,9 @@
       'ep_oom_errors',
       'ep_item_commit_failed',
       'audit_dropped_events',
-      'indexer_ram_max_usage'
+      'indexer_ram_max_usage',
+      'cluster_manager_down',
+      'network_issues'
     ])
     .constant('timeUnitToSeconds', {
       minute: 60,
