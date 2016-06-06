@@ -144,13 +144,13 @@ get_node_state(OtherNode, Node, Status) ->
                                 end, BucketList),
             InactiveBucktes = ordsets:subtract(lists:sort(NodeBuckets),
                                                lists:sort(ActiveReadyBuckets)),
-            case InactiveBucktes of
+            case ActiveReadyBuckets of
                 [] ->
-                    active;
+                    inactive;
                 _ ->
-                    case ActiveReadyBuckets of
+                    case InactiveBucktes of
                         [] ->
-                            inactive;
+                            active;
                         _ ->
                             %% There are some active/ready and some
                             %% non-ready buckets.

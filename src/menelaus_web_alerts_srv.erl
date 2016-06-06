@@ -344,8 +344,9 @@ check(cluster_manager_down, Opaque, _History, _Stats) ->
         fun ({Node, Status}) ->
             case Status of
                 {{needs_attention, [ns_server]}, _} ->
-                    {_Sname, Host} = misc:node_name_host(Node),
-                    Err = fmt_to_bin(errors(cluster_manager_down), [Host]),
+                    %% TODO Host name instead of Sname.
+                    {Sname, _Host} = misc:node_name_host(Node),
+                    Err = fmt_to_bin(errors(cluster_manager_down), [Sname]),
                     global_alert(cluster_manager_down, Err);
                 _ ->
                     ok
@@ -359,14 +360,16 @@ check(network_issues, Opaque, _History, _Stats) ->
         fun ({Node, Status}) ->
             case Status of
                 {{needs_attention, [{_,{potential_network_partition, NodeList}}]}, _} ->
-                    {_Sname, Host} = misc:node_name_host(Node),
+                    %% TODO Host name instead of Sname.
+                    {Sname, _Host} = misc:node_name_host(Node),
                     OtherHostList = lists:map(
                                         fun (N) ->
-                                            {_S, H} = misc:node_name_host(N),
-                                            H
+                                            %% TODO Host name instead of Sname.
+                                            {S, _H} = misc:node_name_host(N),
+                                            S
                                         end, NodeList),
                     OtherHosts = string:join(OtherHostList, ", "),
-                    Err = fmt_to_bin(errors(network_issues), [Host, OtherHosts]),
+                    Err = fmt_to_bin(errors(network_issues), [Sname, OtherHosts]),
                     global_alert(network_issues, Err);
                 _ ->
                     ok
