@@ -79,9 +79,9 @@ errors(audit_dropped_events) ->
 errors(indexer_ram_max_usage) ->
     "Warning: approaching max index RAM. Indexer RAM on node \"~s\" is ~p%, which is at or above the threshold of ~p%.";
 errors(cluster_manager_down) ->
-    "Warning: Cluster manager is probably down on node \"~s\".";
+    "\"~s\" Warning: Cluster manager is probably down on node \"~s\".";
 errors(network_issues) ->
-    "Warning: Node \"~s\" is having issues communicating with following nodes \"~s\".".
+    "\"~s\" Warning: Node \"~s\" is having issues communicating with following nodes \"~s\".".
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
@@ -346,7 +346,8 @@ check(cluster_manager_down, Opaque, _History, _Stats) ->
                 {{needs_attention, [ns_server]}, _} ->
                     %% TODO Host name instead of Sname.
                     {Sname, _Host} = misc:node_name_host(Node),
-                    Err = fmt_to_bin(errors(cluster_manager_down), [Sname]),
+                    {SL, _LH} = misc:node_name_host(node()),
+                    Err = fmt_to_bin(errors(cluster_manager_down), [SL, Sname]),
                     global_alert(cluster_manager_down, Err);
                 _ ->
                     ok
@@ -362,6 +363,7 @@ check(network_issues, Opaque, _History, _Stats) ->
                 {{needs_attention, [{_,{potential_network_partition, NodeList}}]}, _} ->
                     %% TODO Host name instead of Sname.
                     {Sname, _Host} = misc:node_name_host(Node),
+                    {SL, _LH} = misc:node_name_host(node()),
                     OtherHostList = lists:map(
                                         fun (N) ->
                                             %% TODO Host name instead of Sname.
@@ -369,7 +371,7 @@ check(network_issues, Opaque, _History, _Stats) ->
                                             S
                                         end, NodeList),
                     OtherHosts = string:join(OtherHostList, ", "),
-                    Err = fmt_to_bin(errors(network_issues), [Sname, OtherHosts]),
+                    Err = fmt_to_bin(errors(network_issues), [SL, Sname, OtherHosts]),
                     global_alert(network_issues, Err);
                 _ ->
                     ok
